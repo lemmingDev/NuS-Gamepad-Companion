@@ -52,7 +52,12 @@ Flash any `examples/NuS/*` sketch, open the app, Scan → tap the
 ## Troubleshooting
 
 - **Empty scan**: Bluetooth off? Permissions denied? On Android ≤ 11 the
-  location permission is required for BLE scanning — grant it.
+  location permission is required for BLE scanning — grant it. Don't
+  rapid-fire Scan either: Android throttles frequent start/stop cycles and
+  serves empty results — the app scans continuously until you tap Stop.
+  If the board shows in nRF Connect but not here, it's app-side; if it's
+  missing everywhere, the board isn't advertising (stale link — wait ~30s
+  or power-cycle it).
 - **Connects but no hello line**: the sketch needs a NuS subscriber greeting;
   send `help` manually. Check the sketch flashed is a NuS one.
 - **`flutter analyze` complains about versions**: bump the caret deps in

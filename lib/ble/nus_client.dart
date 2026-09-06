@@ -110,9 +110,12 @@ class NusClient extends ChangeNotifier {
     _notify();
     // Broad scan on purpose: firmware cannot be filtered by NUS service UUID
     // (not advertised), so the UI filters by name instead.
-    // startScan returns when the timeout elapses (or stopScan is called), so
-    // drop back to idle here — otherwise the button sticks on "Stop scan".
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+    // No timeout: the scan runs until the user taps Stop. Repeated
+    // start/stop bursts (>~5 per 30s) make Android serve empty results
+    // (scan throttle), so one continuous scan beats frequent re-scans.
+    // startScan returns when stopScan is called; drop back to idle here —
+    // otherwise the button sticks on "Stop scan".
+    await FlutterBluePlus.startScan();
     await _scanSub?.cancel();
     _scanSub = null;
     if (state == NusConnState.scanning) {
@@ -212,7 +215,16 @@ class NusClient extends ChangeNotifier {
       _reconnectTries = 0;
       _teardownLink();
       // License.nonprofit: this MIT-licensed companion app is personal/open-source use.
-      await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 15));
+      try {
+        await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 15));
+      } catch (_) {
+        // One automatic retry: the board often holds a stale half-open link
+        // that supervision timeout drops within seconds, so attempt two lands.
+        _addInfo('Connect failed, retrying once…');
+        _notify();
+        await Future.delayed(const Duration(seconds: 2));
+        await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 15));
+      }
       await _setupLink(d);
 
       state = NusConnState.ready;
