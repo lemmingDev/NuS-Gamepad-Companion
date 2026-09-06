@@ -8,6 +8,7 @@ environment:
   flutter: ">=3.22.0"
 
 dependencies:
+  device_info_plus: ^13.2.0
   flutter:
     sdk: flutter
   # Pinned exact per flutter_blue_plus' own stability advice.

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -65,9 +66,11 @@ class NusClient extends ChangeNotifier {
 
   // ------------------------------------------------------------------ setup
 
-  /// Bluetooth scan/connect permissions. Location is requested too: it is
-  /// required for BLE scanning on Android 11 and below, harmless on newer.
-  /// Proceeds as long as scan+connect are granted.
+  /// Bluetooth scan/connect permissions. Location is requested too: on
+  /// Android 11 and below (API <= 30) it is the ONLY runtime requirement —
+  /// BLUETOOTH_SCAN/CONNECT don't exist there, so permission_handler reports
+  /// them denied without ever showing a dialog. Requiring them would block
+  /// scanning forever on older phones.
   Future<bool> ensurePermissions() async {
     if (!Platform.isAndroid && !Platform.isIOS) {
       return true;
@@ -75,7 +78,14 @@ class NusClient extends ChangeNotifier {
     final scan = await Permission.bluetoothScan.request();
     final connect = await Permission.bluetoothConnect.request();
     if (Platform.isAndroid) {
-      await Permission.locationWhenInUse.request();
+      final location = await Permission.locationWhenInUse.request();
+      if (!location.isGranted) {
+        return false;
+      }
+      final sdkInt = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+      if (sdkInt <= 30) {
+        return true;
+      }
     }
     return scan.isGranted && connect.isGranted;
   }
