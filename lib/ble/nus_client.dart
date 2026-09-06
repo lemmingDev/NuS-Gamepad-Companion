@@ -96,20 +96,29 @@ class NusClient extends ChangeNotifier {
 
   // ------------------------------------------------------------------- scan
 
+  StreamSubscription<List<ScanResult>>? _scanSub;
+
   Future<void> startScan() async {
     await stopScan();
-    _subs.add(
-      FlutterBluePlus.scanResults.listen((results) {
-        scanResults = results;
-        _notify();
-      }),
-    );
+    await _scanSub?.cancel();
+    _scanSub = FlutterBluePlus.scanResults.listen((results) {
+      scanResults = results;
+      _notify();
+    });
     state = NusConnState.scanning;
     errorText = null;
     _notify();
     // Broad scan on purpose: firmware cannot be filtered by NUS service UUID
     // (not advertised), so the UI filters by name instead.
+    // startScan returns when the timeout elapses (or stopScan is called), so
+    // drop back to idle here — otherwise the button sticks on "Stop scan".
     await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+    await _scanSub?.cancel();
+    _scanSub = null;
+    if (state == NusConnState.scanning) {
+      state = NusConnState.idle;
+      _notify();
+    }
   }
 
   Future<void> stopScan() async {
@@ -118,6 +127,8 @@ class NusClient extends ChangeNotifier {
     } catch (_) {
       // Already stopped — harmless.
     }
+    await _scanSub?.cancel();
+    _scanSub = null;
     if (state == NusConnState.scanning) {
       state = NusConnState.idle;
       _notify();
