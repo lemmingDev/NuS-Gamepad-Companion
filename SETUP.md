@@ -38,7 +38,7 @@ flutter run            # with a phone on USB (or an emulator with BLE caveats)
 ```
 
 Flash any `examples/NuS/*` sketch, open the app, Scan → tap the
-`ESP32 …` device → send `help`.
+`*-NuS` device (e.g. `XInput-NuS`) → send `help`.
 
 ## 5. Installable builds
 

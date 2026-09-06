@@ -7,8 +7,9 @@ import 'terminal_screen.dart';
 
 /// Scan for NUS peripherals, connect, hand off to the terminal.
 ///
-/// Devices are filtered by advertised NAME (default `ESP32`): our firmware
-/// carries the NUS service UUID in the scan response (the 31-byte adv packet
+/// Devices are filtered by advertised NAME (default `NuS`): our firmware
+/// advertises `<Role>-NuS` aliases (Diag/Generic/GenAdv/SInput/XInput-NuS)
+/// with the NUS service UUID in the scan response (the 31-byte adv packet
 /// itself is full), so service-UUID filtering only works on active scanners
 /// while name matching works everywhere. Toggle "show all" to see everything.
 class ScanScreen extends StatefulWidget {
@@ -20,7 +21,7 @@ class ScanScreen extends StatefulWidget {
 }
 
 class _ScanScreenState extends State<ScanScreen> {
-  final TextEditingController _filter = TextEditingController(text: 'ESP32');
+  final TextEditingController _filter = TextEditingController(text: 'NuS');
   bool _showAll = false;
 
   @override
