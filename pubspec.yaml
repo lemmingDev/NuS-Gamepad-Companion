@@ -1,0 +1,23 @@
+name: nus_gamepad_companion
+description: Universal Nordic UART terminal + gamepad command profiles for NUS-enabled ESP32 firmware.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.0.0
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Pinned exact per flutter_blue_plus' own stability advice.
+  flutter_blue_plus: 2.3.12
+  permission_handler: ^11.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
