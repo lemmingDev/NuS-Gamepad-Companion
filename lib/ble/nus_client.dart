@@ -137,6 +137,69 @@ class NusClient extends ChangeNotifier {
 
   // ---------------------------------------------------------------- connect
 
+  /// Drops all GATT/link subscriptions and characteristic handles without
+  /// touching [device] or the want-connection flag. Must run before every
+  /// (re)connect: otherwise each reconnect stacks another `_onNotifyBytes`
+  /// listener and every line is logged N times.
+  void _teardownLink() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _subs.clear();
+    _rx = null;
+    _tx = null;
+    _rxBuf.clear();
+  }
+
+  /// Post-connect setup shared by [connect] and the auto-reconnect path:
+  /// MTU, service discovery, TX-notify subscribe, disconnect watcher.
+  Future<void> _setupLink(BluetoothDevice d) async {
+    // Larger writes = fewer chunks per line. Best effort; 20 is the fallback.
+    try {
+      if (Platform.isAndroid) {
+        final mtu = await d.requestMtu(185);
+        _mtuPayload = mtu - 3;
+      } else {
+        final mtu = await d.mtu.first.timeout(const Duration(seconds: 5));
+        _mtuPayload = mtu - 3;
+      }
+      if (_mtuPayload < 20) {
+        _mtuPayload = 20;
+      }
+    } catch (_) {
+      _mtuPayload = 20;
+    }
+
+    final services = await d.discoverServices();
+    BluetoothCharacteristic? rx;
+    BluetoothCharacteristic? tx;
+    for (final s in services) {
+      if (s.uuid == nusServiceUuid) {
+        for (final c in s.characteristics) {
+          if (c.uuid == nusRxUuid) {
+            rx = c;
+          } else if (c.uuid == nusTxUuid) {
+            tx = c;
+          }
+        }
+      }
+    }
+    if (rx == null || tx == null) {
+      throw StateError('Nordic UART Service not found on this device.');
+    }
+    _rx = rx;
+    _tx = tx;
+    await tx.setNotifyValue(true);
+    _subs.add(tx.onValueReceived.listen(_onNotifyBytes));
+    _subs.add(
+      d.connectionState.listen((s) {
+        if (s == BluetoothConnectionState.disconnected && _wantConnection) {
+          _onUnexpectedDisconnect();
+        }
+      }),
+    );
+  }
+
   Future<void> connect(BluetoothDevice d) async {
     await stopScan();
     state = NusConnState.connecting;
@@ -147,53 +210,10 @@ class NusClient extends ChangeNotifier {
       device = d;
       _wantConnection = true;
       _reconnectTries = 0;
+      _teardownLink();
       // License.nonprofit: this MIT-licensed companion app is personal/open-source use.
       await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 15));
-
-      // Larger writes = fewer chunks per line. Best effort; 20 is the fallback.
-      try {
-        if (Platform.isAndroid) {
-          final mtu = await d.requestMtu(185);
-          _mtuPayload = mtu - 3;
-        } else {
-          final mtu = await d.mtu.first.timeout(const Duration(seconds: 5));
-          _mtuPayload = mtu - 3;
-        }
-        if (_mtuPayload < 20) {
-          _mtuPayload = 20;
-        }
-      } catch (_) {
-        _mtuPayload = 20;
-      }
-
-      final services = await d.discoverServices();
-      BluetoothCharacteristic? rx;
-      BluetoothCharacteristic? tx;
-      for (final s in services) {
-        if (s.uuid == nusServiceUuid) {
-          for (final c in s.characteristics) {
-            if (c.uuid == nusRxUuid) {
-              rx = c;
-            } else if (c.uuid == nusTxUuid) {
-              tx = c;
-            }
-          }
-        }
-      }
-      if (rx == null || tx == null) {
-        throw StateError('Nordic UART Service not found on this device.');
-      }
-      _rx = rx;
-      _tx = tx;
-      await tx.setNotifyValue(true);
-      _subs.add(tx.onValueReceived.listen(_onNotifyBytes));
-      _subs.add(
-        d.connectionState.listen((s) {
-          if (s == BluetoothConnectionState.disconnected && _wantConnection) {
-            _onUnexpectedDisconnect();
-          }
-        }),
-      );
+      await _setupLink(d);
 
       state = NusConnState.ready;
       _addInfo('Connected. Send `help` anytime.');
@@ -227,9 +247,8 @@ class NusClient extends ChangeNotifier {
     } catch (_) {
       // Already gone — harmless.
     }
+    _teardownLink();
     device = null;
-    _rx = null;
-    _tx = null;
     activeProfileId = null;
     if (state != NusConnState.idle) {
       state = NusConnState.idle;
@@ -238,6 +257,9 @@ class NusClient extends ChangeNotifier {
   }
 
   void _onUnexpectedDisconnect() {
+    // Drop stale notify/connection subscriptions now; the reconnect attempt
+    // below re-subscribes from scratch via [_setupLink].
+    _teardownLink();
     _addInfo('Link lost.');
     if (_reconnectTries >= 3) {
       state = NusConnState.idle;
@@ -257,6 +279,7 @@ class NusClient extends ChangeNotifier {
       }
       try {
         await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 10));
+        await _setupLink(d);
         _reconnectTries = 0;
         _addInfo('Reconnected.');
         _notify();
@@ -330,10 +353,9 @@ class NusClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();
-    for (final s in _subs) {
-      s.cancel();
-    }
-    _subs.clear();
+    _scanSub?.cancel();
+    _scanSub = null;
+    _teardownLink();
     super.dispose();
   }
 }
