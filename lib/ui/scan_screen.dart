@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../ble/nus_client.dart';
+import '../ble/nus_uuids.dart';
 import 'terminal_screen.dart';
 
 /// Scan for NUS peripherals, connect, hand off to the terminal.
@@ -40,7 +41,17 @@ class _ScanScreenState extends State<ScanScreen> {
       );
       return;
     }
-    await widget.client.startScan();
+    try {
+      await widget.client.startScan();
+    } catch (e) {
+      widget.client.errorText = e.toString();
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Scan failed: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _connectAndOpen(BluetoothDevice device) async {
@@ -160,6 +171,20 @@ class _ScanScreenState extends State<ScanScreen> {
                   final name = r.advertisementData.advName.toLowerCase();
                   return name.contains(q);
                 }).toList();
+                // NUS advertisers first (our firmware carries the NUS UUID in
+                // the scan response), then strongest signal. Strict UUID-only
+                // filtering would hide the board whenever the scan response
+                // isn't captured, so this sorts/badges instead of excluding.
+                bool hasNus(ScanResult r) => r.advertisementData.serviceUuids
+                    .any((u) => u.str.toLowerCase() == nusServiceUuid.str.toLowerCase());
+                results.sort((a, b) {
+                  final an = hasNus(a) ? 0 : 1;
+                  final bn = hasNus(b) ? 0 : 1;
+                  if (an != bn) {
+                    return an - bn;
+                  }
+                  return b.rssi.compareTo(a.rssi);
+                });
                 if (results.isEmpty) {
                   return const Center(child: Text('No devices yet — hit Scan.'));
                 }
@@ -170,9 +195,26 @@ class _ScanScreenState extends State<ScanScreen> {
                     final name = r.advertisementData.advName.isNotEmpty
                         ? r.advertisementData.advName
                         : '(unnamed)';
+                    final nus = hasNus(r);
                     return ListTile(
-                      leading: const Icon(Icons.bluetooth),
-                      title: Text(name),
+                      leading: Icon(Icons.bluetooth,
+                          color: nus ? Colors.tealAccent : null),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(name, overflow: TextOverflow.ellipsis),
+                          ),
+                          if (nus)
+                            const Padding(
+                              padding: EdgeInsets.only(left: 6),
+                              child: Chip(
+                                label: Text('NUS'),
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                              ),
+                            ),
+                        ],
+                      ),
                       subtitle: Text('${r.device.remoteId.str} · ${r.rssi} dBm'),
                       onTap: () => _connectAndOpen(r.device),
                     );
