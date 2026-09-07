@@ -47,6 +47,23 @@ class NusClient extends ChangeNotifier {
   /// `hello`/`proto` line arrives (e.g. after reconnect).
   String? activeProfileId;
 
+  /// Fresh terminal per connection when true (default). Auto-reconnects
+  /// always keep history; only explicit connects clear.
+  bool clearLogOnConnect = true;
+
+  /// Prefix each terminal line with its arrival time when true (default off).
+  bool showTimestamps = false;
+
+  void setClearLogOnConnect(bool v) {
+    clearLogOnConnect = v;
+    _notify();
+  }
+
+  void setShowTimestamps(bool v) {
+    showTimestamps = v;
+    _notify();
+  }
+
   /// Manually select a command profile (overrides auto-detection).
   void setProfileOverride(String id) {
     activeProfileId = id;
@@ -214,6 +231,9 @@ class NusClient extends ChangeNotifier {
       _wantConnection = true;
       _reconnectTries = 0;
       _teardownLink();
+      if (clearLogOnConnect) {
+        log.clear();
+      }
       // License.nonprofit: this MIT-licensed companion app is personal/open-source use.
       try {
         await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 15));

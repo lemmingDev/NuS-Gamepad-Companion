@@ -7,7 +7,11 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Nus Gamepad Companion</string>
+	<string>NuS Gamepad Companion</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Scan for and connect to your NuS gamepad over Bluetooth LE.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Scan for and connect to your NuS gamepad over Bluetooth LE.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

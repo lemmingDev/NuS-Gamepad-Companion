@@ -59,6 +59,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
     await widget.client.sendLine(text);
   }
 
+  static String _ts(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:'
+      '${t.minute.toString().padLeft(2, '0')}:'
+      '${t.second.toString().padLeft(2, '0')}';
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -114,6 +119,29 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       value: p.id,
                       child: Text(p.label),
                     ),
+                ],
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'Terminal options',
+                icon: const Icon(Icons.more_vert),
+                onSelected: (v) {
+                  if (v == 'clear') {
+                    client.setClearLogOnConnect(!client.clearLogOnConnect);
+                  } else if (v == 'stamps') {
+                    client.setShowTimestamps(!client.showTimestamps);
+                  }
+                },
+                itemBuilder: (_) => [
+                  CheckedPopupMenuItem(
+                    value: 'clear',
+                    checked: client.clearLogOnConnect,
+                    child: const Text('Clear log on connect'),
+                  ),
+                  CheckedPopupMenuItem(
+                    value: 'stamps',
+                    checked: client.showTimestamps,
+                    child: const Text('Show timestamps'),
+                  ),
                 ],
               ),
               IconButton(
@@ -172,6 +200,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                           return Padding(
                             padding: const EdgeInsets.symmetric(vertical: 1),
                             child: Text(
+                              '${client.showTimestamps ? '${_ts(e.time)} ' : ''}'
                               '${e.outgoing ? '> ' : ''}${e.message.display}',
                               style: TextStyle(
                                 fontFamily: 'monospace',

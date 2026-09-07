@@ -62,3 +62,9 @@ Flash any `examples/NuS/*` sketch, open the app, Scan → tap the
   send `help` manually. Check the sketch flashed is a NuS one.
 - **`flutter analyze` complains about versions**: bump the caret deps in
   `pubspec.yaml` (`permission_handler`, `flutter_lints`) to current releases.
+- **`flutter run` fails installing when the project path contains a space**
+  (e.g. a username like `PPSHS VR` — adb truncates at the space): build with
+  `flutter build apk --debug`, then install by hand from a space-free path,
+  e.g. `adb install -r C:\Temp\app-debug.apk`, and launch the app on the
+  phone (`adb shell am start -n
+  dev.nuscompanion.nus_gamepad_companion/.MainActivity`).

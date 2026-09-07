@@ -10,11 +10,24 @@ per-firmware command macros. Android-first; iOS builds as a smoke check
 Any peripheral exposing the Nordic UART Service works:
 
 - Service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`, RX `…-0002` (WRITE),
-  TX `…-0003` (notify). The app scans by device **name** — NUS UUIDs are
-  typically absent from the 31-byte advertising packet.
+  TX `…-0003` (notify). The app scans by device **name** (default filter
+  `NuS`): boards advertise short `<Role>-NuS` aliases, and the NUS UUID
+  itself rides in the scan response — advertisers get an NUS badge and sort
+  first, but name matching stays the default since scan responses aren't
+  always captured.
 - Lines are `\n`-terminated; the app chunks writes to the negotiated MTU.
 - Sketches that greet `hello <profile-id> 1` get their macro set
   auto-selected (`proto?` re-queries it). Unknown lines render as-is.
+
+On-air aliases (all ≤11 chars, verified live on hardware):
+
+| Sketch | Alias | Profile ID |
+|--------|-------|------------|
+| NuSSerialDiag | `Diag-NuS` | `nus-diag` |
+| NuSGenericBridge | `Generic-NuS` | `nus-bridge/generic-strict` |
+| NuSGenericAdvanced | `GenAdv-NuS` | `nus-bridge/generic-advanced` |
+| NuSSInputBridge | `SInput-NuS` | `nus-bridge/sinput` |
+| NuSXInputBridge | `XInput-NuS` | `nus-bridge/xinput` |
 
 Tested against [`ESP32-BLE-Gamepad`](https://github.com/lemmingDev/ESP32-BLE-Gamepad)
 `examples/NuS/*` (Generic strict/advanced, SInput, XInput, Diagnostics) and
