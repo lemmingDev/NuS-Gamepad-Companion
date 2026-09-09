@@ -6,6 +6,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../protocol/messages.dart';
 import '../protocol/parser.dart';
@@ -54,14 +55,44 @@ class NusClient extends ChangeNotifier {
   /// Prefix each terminal line with its arrival time when true (default off).
   bool showTimestamps = false;
 
+  static const _kClearLog = 'clearLogOnConnect';
+  static const _kStamps = 'showTimestamps';
+
+  NusClient() {
+    _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      clearLogOnConnect = p.getBool(_kClearLog) ?? true;
+      showTimestamps = p.getBool(_kStamps) ?? false;
+      _notify();
+    } catch (_) {
+      // Prefs unavailable — fall back to defaults.
+    }
+  }
+
+  Future<void> _savePrefs() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(_kClearLog, clearLogOnConnect);
+      await p.setBool(_kStamps, showTimestamps);
+    } catch (_) {
+      // Best effort only.
+    }
+  }
+
   void setClearLogOnConnect(bool v) {
     clearLogOnConnect = v;
     _notify();
+    _savePrefs();
   }
 
   void setShowTimestamps(bool v) {
     showTimestamps = v;
     _notify();
+    _savePrefs();
   }
 
   /// Manually select a command profile (overrides auto-detection).
@@ -114,6 +145,7 @@ class NusClient extends ChangeNotifier {
   // ------------------------------------------------------------------- scan
 
   StreamSubscription<List<ScanResult>>? _scanSub;
+  Timer? _scanWatchdog;
 
   Future<void> startScan() async {
     await stopScan();
@@ -127,9 +159,17 @@ class NusClient extends ChangeNotifier {
     _notify();
     // Broad scan on purpose: firmware cannot be filtered by NUS service UUID
     // (not advertised), so the UI filters by name instead.
-    // No timeout: the scan runs until the user taps Stop. Repeated
+    // No OS timeout: the scan runs until the user taps Stop. Repeated
     // start/stop bursts (>~5 per 30s) make Android serve empty results
     // (scan throttle), so one continuous scan beats frequent re-scans.
+    // A 2-minute watchdog stops runaway scans (battery); re-tapping Scan
+    // afterwards is a single start/stop pair, safely under the throttle.
+    _scanWatchdog?.cancel();
+    _scanWatchdog = Timer(const Duration(minutes: 2), () {
+      if (state == NusConnState.scanning) {
+        stopScan();
+      }
+    });
     // startScan returns when stopScan is called; drop back to idle here —
     // otherwise the button sticks on "Stop scan".
     await FlutterBluePlus.startScan();
@@ -147,6 +187,8 @@ class NusClient extends ChangeNotifier {
     } catch (_) {
       // Already stopped — harmless.
     }
+    _scanWatchdog?.cancel();
+    _scanWatchdog = null;
     await _scanSub?.cancel();
     _scanSub = null;
     if (state == NusConnState.scanning) {
@@ -385,6 +427,8 @@ class NusClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();
+    _scanWatchdog?.cancel();
+    _scanWatchdog = null;
     _scanSub?.cancel();
     _scanSub = null;
     _teardownLink();
