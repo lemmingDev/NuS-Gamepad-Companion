@@ -4,6 +4,8 @@ import '../ble/nus_client.dart';
 import '../protocol/messages.dart';
 import '../protocol/profiles.dart';
 import 'controller_screen.dart';
+import 'sinput_screen.dart';
+import 'xinput_screen.dart';
 
 /// NUS console: color-coded log, command input, macro chips for the active
 /// device profile (auto-selected from the sketch's `hello` line, overridable).
@@ -115,14 +117,25 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 tooltip: 'Controller',
                 icon: const Icon(Icons.gamepad),
                 onPressed: (connected &&
-                        isGenericControllerProfile(
-                            client.activeProfileId))
-                    ? () => Navigator.of(context).push(
+                        (isGenericControllerProfile(
+                                client.activeProfileId) ||
+                            isSinputControllerProfile(
+                                client.activeProfileId) ||
+                            isXinputControllerProfile(
+                                client.activeProfileId)))
+                    ? () {
+                        final id = client.activeProfileId;
+                        final dest = isSinputControllerProfile(id)
+                            ? SinputScreen(client: client)
+                            : isXinputControllerProfile(id)
+                                ? XinputScreen(client: client)
+                                : ControllerScreen(client: client);
+                        Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) =>
-                                ControllerScreen(client: client),
+                            builder: (_) => dest,
                           ),
-                        )
+                        );
+                      }
                     : null,
               ),
               PopupMenuButton<String>(
