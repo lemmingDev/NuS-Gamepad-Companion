@@ -153,6 +153,10 @@ class NusClient extends ChangeNotifier {
   BluetoothCharacteristic? _rx;
   BluetoothCharacteristic? _tx;
   int _mtuPayload = 20;
+  // Serializes all outbound writes. Without this, concurrent sendLine calls
+  // (e.g. 10Hz motion streaming + a button tap) interleave MTU chunks on the
+  // wire, garbling lines and stalling senders behind each other's awaits.
+  Future<void> _sendQueue = Future.value();
   final StringBuffer _rxBuf = StringBuffer();
   final List<StreamSubscription> _subs = [];
   bool _disposed = false;
@@ -442,19 +446,26 @@ class NusClient extends ChangeNotifier {
   }
 
   /// Sends one line (appends `\n`, chunks to the negotiated MTU).
-  Future<void> sendLine(String line) async {
+  /// Outbound writes are serialized through [_sendQueue] so concurrent
+  /// callers never interleave chunks; a tap waits at most one in-flight line.
+  Future<void> sendLine(String line) {
     final rx = _rx;
     final text = line.trim();
     if (rx == null || text.isEmpty || state != NusConnState.ready) {
-      return;
+      return Future.value();
     }
     log.add(LogEntry(InfoMessage(text), outgoing: true));
     _notify();
     final bytes = utf8.encode('$text\n');
-    for (var i = 0; i < bytes.length; i += _mtuPayload) {
-      final end = (i + _mtuPayload < bytes.length) ? i + _mtuPayload : bytes.length;
-      await rx.write(bytes.sublist(i, end));
-    }
+    final run = _sendQueue.then((_) async {
+      for (var i = 0; i < bytes.length; i += _mtuPayload) {
+        final end =
+            (i + _mtuPayload < bytes.length) ? i + _mtuPayload : bytes.length;
+        await rx.write(bytes.sublist(i, end));
+      }
+    });
+    _sendQueue = run.catchError((_) {});
+    return run;
   }
 
   void _addInfo(String text) {

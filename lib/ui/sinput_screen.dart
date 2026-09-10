@@ -74,6 +74,7 @@ class _SinputScreenState extends State<SinputScreen> {
   StreamSubscription<AccelerometerEvent>? _accelSub;
   Timer? _motionTimer;
   double _gx = 0, _gy = 0, _gz = 0, _ax = 0, _ay = 0, _az = 0;
+  List<int>? _lastMotion;
 
   @override
   void dispose() {
@@ -98,14 +99,41 @@ class _SinputScreenState extends State<SinputScreen> {
       _az = e.z;
     });
     _motionTimer?.cancel();
+    _lastMotion = null;
     _motionTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (!mounted || !_motionOn) {
         return;
       }
       int c(double v, double s) =>
           (v * s).round().clamp(-32768, 32767);
-      _send('motion ${c(_gx, 1000)} ${c(_gy, 1000)} ${c(_gz, 1000)} '
-          '${c(_ax, 500)} ${c(_ay, 500)} ${c(_az, 500)}');
+      final cur = [
+        c(_gx, 1000),
+        c(_gy, 1000),
+        c(_gz, 1000),
+        c(_ax, 500),
+        c(_ay, 500),
+        c(_az, 500),
+      ];
+      // Delta gate: a still phone sends nothing, so buttons/axes never queue
+      // behind a wall of unchanged motion lines. Thresholds (~0.05 rad/s gyro,
+      // ~0.2 m/s^2 accel) sit above sensor noise for hand-held use.
+      final prev = _lastMotion;
+      var changed = prev == null;
+      if (!changed) {
+        for (var i = 0; i < 6; i++) {
+          final eps = i < 3 ? 50 : 100;
+          if ((cur[i] - prev[i]).abs() >= eps) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (!changed) {
+        return;
+      }
+      _lastMotion = cur;
+      _send('motion ${cur[0]} ${cur[1]} ${cur[2]} '
+          '${cur[3]} ${cur[4]} ${cur[5]}');
     });
   }
 
