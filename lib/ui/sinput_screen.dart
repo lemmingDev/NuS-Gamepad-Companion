@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
 import '../ble/nus_client.dart';
 import '../protocol/profiles.dart';
@@ -40,11 +41,11 @@ const _hatGlyphs = {
 const _specials = ['start', 'select', 'home'];
 
 /// On-screen SInput gamepad: 25 buttons, 2 sticks, 2 triggers, 1 hat,
-/// start/select/home specials.
+/// start/select/home specials, plus optional phone-IMU motion streaming.
 ///
-/// Motion/touch are intentionally skipped (need sensors; terminal macros
-/// cover them). Drives bridge commands through [NusClient.sendLine].
-/// Pointer handlers fire without awaiting so touch latency stays minimal.
+/// Touch commands stay terminal-only (need multitouch pads). Drives bridge
+/// commands through [NusClient.sendLine]. Pointer handlers fire without
+/// awaiting so touch latency stays minimal.
 class SinputScreen extends StatefulWidget {
   final NusClient client;
   const SinputScreen({super.key, required this.client});
@@ -63,6 +64,59 @@ class _SinputScreenState extends State<SinputScreen> {
   double _trigLeft = 0;
   double _trigRight = 0;
   int _hat = 0;
+
+  // Phone-IMU motion streaming. Gyro rad/s x1000 and accel m/s^2 x500 land
+  // in int16 range for realistic hand motion (clamped); this drives the
+  // sketch's fire-and-forget `motion` command for testing, not calibrated
+  // IMU fusion. Sent at 10Hz while enabled.
+  bool _motionOn = false;
+  StreamSubscription<GyroscopeEvent>? _gyroSub;
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  Timer? _motionTimer;
+  double _gx = 0, _gy = 0, _gz = 0, _ax = 0, _ay = 0, _az = 0;
+
+  @override
+  void dispose() {
+    _stopMotion();
+    super.dispose();
+  }
+
+  void _setMotion(bool on) {
+    setState(() => _motionOn = on);
+    if (!on) {
+      _stopMotion();
+      return;
+    }
+    _gyroSub = gyroscopeEventStream().listen((e) {
+      _gx = e.x;
+      _gy = e.y;
+      _gz = e.z;
+    });
+    _accelSub = accelerometerEventStream().listen((e) {
+      _ax = e.x;
+      _ay = e.y;
+      _az = e.z;
+    });
+    _motionTimer?.cancel();
+    _motionTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!mounted || !_motionOn) {
+        return;
+      }
+      int c(double v, double s) =>
+          (v * s).round().clamp(-32768, 32767);
+      _send('motion ${c(_gx, 1000)} ${c(_gy, 1000)} ${c(_gz, 1000)} '
+          '${c(_ax, 500)} ${c(_ay, 500)} ${c(_az, 500)}');
+    });
+  }
+
+  void _stopMotion() {
+    _motionTimer?.cancel();
+    _motionTimer = null;
+    _gyroSub?.cancel();
+    _gyroSub = null;
+    _accelSub?.cancel();
+    _accelSub = null;
+  }
 
   void _send(String line) {
     unawaited(widget.client.sendLine(line));
@@ -375,6 +429,18 @@ class _SinputScreenState extends State<SinputScreen> {
                         ),
                       ),
                   ],
+                ),
+                const _SectionHeader(
+                  title: 'Motion',
+                  wire: 'motion <gx> <gy> <gz> <ax> <ay> <az> @10Hz',
+                ),
+                SwitchListTile(
+                  key: const ValueKey('motion-toggle'),
+                  title: const Text('Stream phone IMU'),
+                  subtitle: const Text(
+                      'Gyro x1000, accel x500 — testing only, not calibrated'),
+                  value: _motionOn,
+                  onChanged: connected ? _setMotion : null,
                 ),
               ],
             ),

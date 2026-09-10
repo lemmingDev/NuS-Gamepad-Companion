@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:vibration/vibration.dart';
 
 import '../protocol/messages.dart';
 import '../protocol/parser.dart';
@@ -55,8 +56,13 @@ class NusClient extends ChangeNotifier {
   /// Prefix each terminal line with its arrival time when true (default off).
   bool showTimestamps = false;
 
+  /// Buzz the phone when an `event rumble` line arrives (default off).
+  /// Android-only in practice (iOS has no sustained-vibration API).
+  bool vibrateOnRumble = false;
+
   static const _kClearLog = 'clearLogOnConnect';
   static const _kStamps = 'showTimestamps';
+  static const _kVibrate = 'vibrateOnRumble';
 
   NusClient() {
     _loadPrefs();
@@ -67,6 +73,7 @@ class NusClient extends ChangeNotifier {
       final p = await SharedPreferences.getInstance();
       clearLogOnConnect = p.getBool(_kClearLog) ?? true;
       showTimestamps = p.getBool(_kStamps) ?? false;
+      vibrateOnRumble = p.getBool(_kVibrate) ?? false;
       _notify();
     } catch (_) {
       // Prefs unavailable — fall back to defaults.
@@ -78,6 +85,7 @@ class NusClient extends ChangeNotifier {
       final p = await SharedPreferences.getInstance();
       await p.setBool(_kClearLog, clearLogOnConnect);
       await p.setBool(_kStamps, showTimestamps);
+      await p.setBool(_kVibrate, vibrateOnRumble);
     } catch (_) {
       // Best effort only.
     }
@@ -93,6 +101,46 @@ class NusClient extends ChangeNotifier {
     showTimestamps = v;
     _notify();
     _savePrefs();
+  }
+
+  void setVibrateOnRumble(bool v) {
+    vibrateOnRumble = v;
+    _notify();
+    _savePrefs();
+  }
+
+  static final _rumbleMagRe = RegExp(r'(?:strong|weak|left|right)=(\d+)');
+
+  /// Maps an `event rumble ...` rest string to a vibration duration in ms.
+  /// Understands SInput (`left=`/`right=`) and XInput (`strong=`/`weak=`)
+  /// shapes; 0 when nothing parseable or all zero. Pure for testability.
+  static int rumbleVibrateMs(String rest) {
+    var peak = 0;
+    for (final m in _rumbleMagRe.allMatches(rest)) {
+      final v = int.tryParse(m.group(1)!) ?? 0;
+      if (v > peak) {
+        peak = v;
+      }
+    }
+    if (peak <= 0) {
+      return 0;
+    }
+    return 20 + (peak.clamp(0, 255) * 230 ~/ 255);
+  }
+
+  Future<void> _buzzForRumble(String rest) async {
+    try {
+      final ms = rumbleVibrateMs(rest);
+      if (ms <= 0 || _disposed) {
+        return;
+      }
+      if (await Vibration.hasVibrator() != true) {
+        return;
+      }
+      await Vibration.vibrate(duration: ms);
+    } catch (_) {
+      // Haptics unavailable — never break the terminal for a buzz.
+    }
   }
 
   /// Manually select a command profile (overrides auto-detection).
@@ -386,6 +434,9 @@ class NusClient extends ChangeNotifier {
         activeProfileId = msg.profileId;
       }
       log.add(LogEntry(msg));
+      if (msg is EventMessage && msg.name == 'rumble' && vibrateOnRumble) {
+        unawaited(_buzzForRumble(msg.rest));
+      }
     }
     _notify();
   }

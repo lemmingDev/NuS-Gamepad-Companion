@@ -14,7 +14,9 @@ dependencies:
   # Pinned exact per flutter_blue_plus' own stability advice.
   flutter_blue_plus: 2.3.12
   permission_handler: ^11.0.0
+  sensors_plus: ^7.1.0
   shared_preferences: ^2.5.5
+  vibration: ^3.2.1
 
 dev_dependencies:
   flutter_test:

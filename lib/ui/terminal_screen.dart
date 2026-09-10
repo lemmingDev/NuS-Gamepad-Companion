@@ -157,6 +157,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     client.setClearLogOnConnect(!client.clearLogOnConnect);
                   } else if (v == 'stamps') {
                     client.setShowTimestamps(!client.showTimestamps);
+                  } else if (v == 'vibrate') {
+                    client.setVibrateOnRumble(!client.vibrateOnRumble);
                   }
                 },
                 itemBuilder: (_) => [
@@ -169,6 +171,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     value: 'stamps',
                     checked: client.showTimestamps,
                     child: const Text('Show timestamps'),
+                  ),
+                  CheckedPopupMenuItem(
+                    value: 'vibrate',
+                    checked: client.vibrateOnRumble,
+                    child: const Text('Vibrate on rumble'),
                   ),
                 ],
               ),

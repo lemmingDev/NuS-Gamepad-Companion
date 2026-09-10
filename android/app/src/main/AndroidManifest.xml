@@ -9,6 +9,8 @@
     <!-- Location is only used for BLE scanning on Android 11 and below
          (API <= 30). Requested at runtime alongside Bluetooth permissions. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <!-- Normal (install-time) permission for vibrate-on-rumble feedback. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Classic Bluetooth permissions: install-time normal permissions, but
          REQUIRED on API <= 30 — without them every adapter call
          (getState, scans) throws SecurityException. maxSdkVersion keeps them
