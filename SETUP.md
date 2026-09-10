@@ -60,8 +60,11 @@ Flash any `examples/NuS/*` sketch, open the app, Scan → tap the
   or power-cycle it).
 - **SInput board shows "Driver Error" / no controller in `joy.cpl`/Steam
   on Windows**: expected — no Windows SInput driver exists. SInput hosts
-  are SDL3-based (Linux); validate SInput purely through the app's NuS
-  round-trip (`ok` replies + `state` line), never through Windows.
+  are SDL3-based (Linux); validate SInput through the app's NuS
+  round-trip (`ok` replies + `state` line). For host output reports
+  (player-LED, rumble, RGB incl. the onboard Player-1 LED), any WebHID
+  host works — verified live with joypad.ai. Note `rumble?` shows the
+  *last* frame, so read it mid-pulse; stop-frames report zero.
 - **Connects but no hello line**: the sketch needs a NuS subscriber greeting;
   send `help` manually. Check the sketch flashed is a NuS one.
 - **`flutter analyze` complains about versions**: bump the caret deps in
