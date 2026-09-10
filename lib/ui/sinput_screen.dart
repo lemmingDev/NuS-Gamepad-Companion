@@ -5,6 +5,7 @@ import 'package:sensors_plus/sensors_plus.dart';
 
 import '../ble/nus_client.dart';
 import '../protocol/profiles.dart';
+import 'host_status_strip.dart';
 
 /// Profile ids whose firmware speaks the SInput bridge wire syntax
 /// (`press`/`release`/`stick`/`trigger`/`hat`/`special`,
@@ -248,6 +249,13 @@ class _SinputScreenState extends State<SinputScreen> {
                     padding: EdgeInsets.only(top: 8),
                     child: Text('Disconnected — controls disabled.'),
                   ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: HostStatusStrip(
+                    ledIndex: client.lastLedIndex,
+                    rgb: client.lastRgb,
+                  ),
+                ),
                 Row(
                   children: [
                     const Expanded(

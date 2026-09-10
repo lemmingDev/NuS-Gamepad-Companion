@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../ble/nus_client.dart';
 import '../protocol/messages.dart';
 import '../protocol/profiles.dart';
+import 'host_status_strip.dart';
 import 'controller_screen.dart';
 import 'sinput_screen.dart';
 import 'xinput_screen.dart';
@@ -203,6 +204,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(profile.hint, style: Theme.of(context).textTheme.labelSmall),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: HostStatusStrip(
+                    ledIndex: client.lastLedIndex,
+                    rgb: client.lastRgb,
+                  ),
                 ),
               ),
               SizedBox(

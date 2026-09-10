@@ -60,6 +60,12 @@ class NusClient extends ChangeNotifier {
   /// Android-only in practice (iOS has no sustained-vibration API).
   bool vibrateOnRumble = false;
 
+  /// Last known host LED index (`event led N`, 0 = none) and RGB
+  /// (`event rgb r= R g= G b= B`, 0..255). Updated live for the status strip;
+  /// query replies arrive as the same events, so no separate fetch needed.
+  int lastLedIndex = 0;
+  List<int> lastRgb = const [0, 0, 0];
+
   static const _kClearLog = 'clearLogOnConnect';
   static const _kStamps = 'showTimestamps';
   static const _kVibrate = 'vibrateOnRumble';
@@ -107,6 +113,38 @@ class NusClient extends ChangeNotifier {
     vibrateOnRumble = v;
     _notify();
     _savePrefs();
+  }
+
+  /// Records host LED/RGB state for the status strip. Pure parsing, no I/O.
+  void _trackHostState(EventMessage msg) {
+    if (msg.name == 'led') {
+      final v = int.tryParse(msg.rest.trim());
+      if (v != null) {
+        lastLedIndex = v.clamp(0, 4);
+      }
+    } else if (msg.name == 'rgb') {
+      final r = _kvInt(msg.rest, 'r');
+      final g = _kvInt(msg.rest, 'g');
+      final b = _kvInt(msg.rest, 'b');
+      if (r != null || g != null || b != null) {
+        final cur = List<int>.of(lastRgb);
+        if (r != null) {
+          cur[0] = r.clamp(0, 255);
+        }
+        if (g != null) {
+          cur[1] = g.clamp(0, 255);
+        }
+        if (b != null) {
+          cur[2] = b.clamp(0, 255);
+        }
+        lastRgb = cur;
+      }
+    }
+  }
+
+  static int? _kvInt(String rest, String key) {
+    final m = RegExp('$key=(\\d+)').firstMatch(rest);
+    return m == null ? null : int.tryParse(m.group(1)!);
   }
 
   static final _rumbleMagRe = RegExp(r'(?:strong|weak|left|right)=(\d+)');
@@ -438,8 +476,11 @@ class NusClient extends ChangeNotifier {
         activeProfileId = msg.profileId;
       }
       log.add(LogEntry(msg));
-      if (msg is EventMessage && msg.name == 'rumble' && vibrateOnRumble) {
-        unawaited(_buzzForRumble(msg.rest));
+      if (msg is EventMessage) {
+        _trackHostState(msg);
+        if (msg.name == 'rumble' && vibrateOnRumble) {
+          unawaited(_buzzForRumble(msg.rest));
+        }
       }
     }
     _notify();
