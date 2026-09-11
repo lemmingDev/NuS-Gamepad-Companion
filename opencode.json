@@ -1,1 +1,1 @@
-{"$schema": "https://opencode.ai/config.json", "default_agent": "project-manager"}
+{"$schema": "https://opencode.ai/config.json", "default_agent": "project-manager", "instructions": [".opencode/AGENTS.md"]}
