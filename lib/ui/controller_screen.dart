@@ -7,9 +7,11 @@ import '../protocol/profiles.dart';
 
 /// Profile ids whose firmware speaks the generic bridge wire syntax
 /// (`press`/`release`/`axis`/`hat`, see the NuSGenericBridge sketch).
+/// Includes `composite-generic`, whose NuSGamepadBridge syntax is identical.
 const kGenericControllerProfiles = {
   'nus-bridge/generic-strict',
   'nus-bridge/generic-advanced',
+  'nus-bridge/composite-generic',
 };
 
 /// True when [id] resolves (via [profileForId]) to a generic bridge profile.

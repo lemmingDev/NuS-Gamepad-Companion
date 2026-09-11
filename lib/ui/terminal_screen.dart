@@ -4,6 +4,8 @@ import '../ble/nus_client.dart';
 import '../protocol/messages.dart';
 import '../protocol/profiles.dart';
 import 'host_status_strip.dart';
+import 'composite_dualsense_screen.dart';
+import 'composite_xbox_screen.dart';
 import 'controller_screen.dart';
 import 'sinput_screen.dart';
 import 'xinput_screen.dart';
@@ -123,14 +125,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
                             isSinputControllerProfile(
                                 client.activeProfileId) ||
                             isXinputControllerProfile(
+                                client.activeProfileId) ||
+                            isCompositeXboxProfile(
+                                client.activeProfileId) ||
+                            isCompositeDualsenseProfile(
                                 client.activeProfileId)))
                     ? () {
                         final id = client.activeProfileId;
-                        final dest = isSinputControllerProfile(id)
-                            ? SinputScreen(client: client)
-                            : isXinputControllerProfile(id)
-                                ? XinputScreen(client: client)
-                                : ControllerScreen(client: client);
+                        final dest = isCompositeXboxProfile(id)
+                            ? CompositeXboxScreen(client: client)
+                            : isCompositeDualsenseProfile(id)
+                                ? CompositeDualsenseScreen(client: client)
+                                : isSinputControllerProfile(id)
+                                    ? SinputScreen(client: client)
+                                    : isXinputControllerProfile(id)
+                                        ? XinputScreen(client: client)
+                                        : ControllerScreen(client: client);
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => dest,
