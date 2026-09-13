@@ -1,540 +1,143 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io' show Platform;
 
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:vibration/vibration.dart';
 
-import '../protocol/messages.dart';
-import '../protocol/parser.dart';
-import 'nus_uuids.dart';
+import '../data/repositories/ble_repository.dart';
+import '../data/services/ble_service.dart';
 
-/// Connection lifecycle exposed to the UI.
-enum NusConnState { idle, scanning, connecting, ready, error }
+// Re-export domain models so existing imports from `nus_client.dart`
+// continue to resolve `NusConnState` and `LogEntry`.
+export '../domain/models/connection_state.dart';
+export '../domain/models/log_entry.dart';
 
-/// One row in the terminal log.
-class LogEntry {
-  final DateTime time;
-  final NuSMessage message;
-  final bool outgoing;
-  LogEntry(this.message, {this.outgoing = false}) : time = DateTime.now();
-}
-
-/// BLE central for one Nordic UART peripheral + line discipline on top.
+/// Backward-compatible facade over [BleRepository].
 ///
-/// Scan by NAME (our firmware does not advertise the NUS UUID — the 31-byte
-/// advertising packet is full). After connect: discover services, find NUS by
-/// UUID, subscribe to TX notifications, write `\n`-terminated lines to RX
-/// (write-with-response — the firmware RX characteristic is WRITE-only).
+/// The monolithic `NusClient` god object has been split into
+/// `BleService` (stateless `flutter_blue_plus` wrapper) + `BleRepository`
+/// (single source of truth).  This class now delegates every call to an
+/// internal [BleRepository] instance so existing call sites
+/// (`ScanScreen`, `TerminalScreen`, pad screens, tests) keep working
+/// without behavioural change.
+///
+/// New code should inject [BleRepository] (or a feature [ChangeNotifier]
+/// ViewModel) directly instead of using this facade.
 class NusClient extends ChangeNotifier {
-  NusConnState state = NusConnState.idle;
-  String? errorText;
-  List<ScanResult> scanResults = [];
-  BluetoothDevice? device;
-  String get deviceLabel {
-    final d = device;
-    if (d == null) {
-      return '';
-    }
-    return d.platformName.isNotEmpty ? d.platformName : d.remoteId.str;
-  }
-  final List<LogEntry> log = [];
+  final BleRepository _repo;
+  final bool _ownsRepo;
 
-  /// Profile id from the latest `hello`/`proto` line, or null.
-  /// A manual override via [setProfileOverride] wins until the next
-  /// `hello`/`proto` line arrives (e.g. after reconnect).
-  String? activeProfileId;
-
-  /// Fresh terminal per connection when true (default). Auto-reconnects
-  /// always keep history; only explicit connects clear.
-  bool clearLogOnConnect = true;
-
-  /// Prefix each terminal line with its arrival time when true (default off).
-  bool showTimestamps = false;
-
-  /// Buzz the phone when an `event rumble` line arrives (default off).
-  /// Android-only in practice (iOS has no sustained-vibration API).
-  bool vibrateOnRumble = false;
-
-  /// Last known host LED index (`event led N`, 0 = none) and RGB
-  /// (`event rgb r= R g= G b= B`, 0..255). Updated live for the status strip;
-  /// query replies arrive as the same events, so no separate fetch needed.
-  int lastLedIndex = 0;
-  List<int> lastRgb = const [0, 0, 0];
-
-  static const _kClearLog = 'clearLogOnConnect';
-  static const _kStamps = 'showTimestamps';
-  static const _kVibrate = 'vibrateOnRumble';
-
-  NusClient() {
-    _loadPrefs();
+  NusClient({BleService? bleService})
+      : _repo = BleRepository(bleService: bleService ?? const BleService()),
+        _ownsRepo = true {
+    _repo.addListener(_onRepoChanged);
   }
 
-  Future<void> _loadPrefs() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      clearLogOnConnect = p.getBool(_kClearLog) ?? true;
-      showTimestamps = p.getBool(_kStamps) ?? false;
-      vibrateOnRumble = p.getBool(_kVibrate) ?? false;
-      _notify();
-    } catch (_) {
-      // Prefs unavailable — fall back to defaults.
-    }
+  /// Shares an existing repository (e.g. from a ViewModel) without taking
+  /// ownership — disposing the shim does not dispose the shared repository.
+  NusClient.fromRepository(BleRepository repo)
+      : _repo = repo,
+        _ownsRepo = false {
+    _repo.addListener(_onRepoChanged);
   }
 
-  Future<void> _savePrefs() async {
-    try {
-      final p = await SharedPreferences.getInstance();
-      await p.setBool(_kClearLog, clearLogOnConnect);
-      await p.setBool(_kStamps, showTimestamps);
-      await p.setBool(_kVibrate, vibrateOnRumble);
-    } catch (_) {
-      // Best effort only.
-    }
+  /// Direct access to the underlying repository for ViewModel wiring.
+  BleRepository get repository => _repo;
+
+  void _onRepoChanged() {
+    if (!_disposed) notifyListeners();
   }
 
-  void setClearLogOnConnect(bool v) {
-    clearLogOnConnect = v;
-    _notify();
-    _savePrefs();
-  }
-
-  void setShowTimestamps(bool v) {
-    showTimestamps = v;
-    _notify();
-    _savePrefs();
-  }
-
-  void setVibrateOnRumble(bool v) {
-    vibrateOnRumble = v;
-    _notify();
-    _savePrefs();
-  }
-
-  /// Records host LED/RGB state for the status strip. Pure parsing, no I/O.
-  void _trackHostState(EventMessage msg) {
-    if (msg.name == 'led') {
-      final v = int.tryParse(msg.rest.trim());
-      if (v != null) {
-        lastLedIndex = v.clamp(0, 4);
-      }
-    } else if (msg.name == 'rgb') {
-      final r = _kvInt(msg.rest, 'r');
-      final g = _kvInt(msg.rest, 'g');
-      final b = _kvInt(msg.rest, 'b');
-      if (r != null || g != null || b != null) {
-        final cur = List<int>.of(lastRgb);
-        if (r != null) {
-          cur[0] = r.clamp(0, 255);
-        }
-        if (g != null) {
-          cur[1] = g.clamp(0, 255);
-        }
-        if (b != null) {
-          cur[2] = b.clamp(0, 255);
-        }
-        lastRgb = cur;
-      }
-    }
-  }
-
-  static int? _kvInt(String rest, String key) {
-    final m = RegExp('$key=(\\d+)').firstMatch(rest);
-    return m == null ? null : int.tryParse(m.group(1)!);
-  }
-
-  static final _rumbleMagRe = RegExp(r'(?:strong|weak|left|right)=(\d+)');
-
-  /// Maps an `event rumble ...` rest string to a vibration duration in ms.
-  /// Understands SInput (`left=`/`right=`) and XInput (`strong=`/`weak=`)
-  /// shapes; 0 when nothing parseable or all zero. Pure for testability.
-  static int rumbleVibrateMs(String rest) {
-    var peak = 0;
-    for (final m in _rumbleMagRe.allMatches(rest)) {
-      final v = int.tryParse(m.group(1)!) ?? 0;
-      if (v > peak) {
-        peak = v;
-      }
-    }
-    if (peak <= 0) {
-      return 0;
-    }
-    return 20 + (peak.clamp(0, 255) * 230 ~/ 255);
-  }
-
-  Future<void> _buzzForRumble(String rest) async {
-    try {
-      final ms = rumbleVibrateMs(rest);
-      if (ms <= 0 || _disposed) {
-        return;
-      }
-      if (await Vibration.hasVibrator() != true) {
-        return;
-      }
-      await Vibration.vibrate(duration: ms);
-    } catch (_) {
-      // Haptics unavailable — never break the terminal for a buzz.
-    }
-  }
-
-  /// Manually select a command profile (overrides auto-detection).
-  void setProfileOverride(String id) {
-    activeProfileId = id;
-    _addInfo('Profile: $id (manual override).');
-    _notify();
-  }
-
-  BluetoothCharacteristic? _rx;
-  BluetoothCharacteristic? _tx;
-  int _mtuPayload = 20;
-  // Serializes all outbound writes. Without this, concurrent sendLine calls
-  // (e.g. 10Hz motion streaming + a button tap) interleave MTU chunks on the
-  // wire, garbling lines and stalling senders behind each other's awaits.
-  Future<void> _sendQueue = Future.value();
-  final StringBuffer _rxBuf = StringBuffer();
-  final List<StreamSubscription> _subs = [];
   bool _disposed = false;
-  bool _wantConnection = false;
-  int _reconnectTries = 0;
-  Timer? _reconnectTimer;
 
-  // ------------------------------------------------------------------ setup
-
-  /// Bluetooth scan/connect permissions. Location is requested too: on
-  /// Android 11 and below (API <= 30) it is the ONLY runtime requirement —
-  /// BLUETOOTH_SCAN/CONNECT don't exist there, so permission_handler reports
-  /// them denied without ever showing a dialog. Requiring them would block
-  /// scanning forever on older phones.
-  Future<bool> ensurePermissions() async {
-    if (!Platform.isAndroid && !Platform.isIOS) {
-      return true;
-    }
-    final scan = await Permission.bluetoothScan.request();
-    final connect = await Permission.bluetoothConnect.request();
-    if (Platform.isAndroid) {
-      final location = await Permission.locationWhenInUse.request();
-      if (!location.isGranted) {
-        return false;
-      }
-      final sdkInt = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
-      if (sdkInt <= 30) {
-        return true;
-      }
-    }
-    return scan.isGranted && connect.isGranted;
+  // ---------------------------------------------------------------- state
+  NusConnState get state => _repo.state;
+  set state(NusConnState v) {
+    _repo.state = v;
+    notifyListeners();
   }
 
-  Stream<BluetoothAdapterState> get adapterState => FlutterBluePlus.adapterState;
-
-  Future<bool> get isSupported => FlutterBluePlus.isSupported;
-
-  // ------------------------------------------------------------------- scan
-
-  StreamSubscription<List<ScanResult>>? _scanSub;
-  Timer? _scanWatchdog;
-
-  Future<void> startScan() async {
-    await stopScan();
-    await _scanSub?.cancel();
-    _scanSub = FlutterBluePlus.scanResults.listen((results) {
-      scanResults = results;
-      _notify();
-    });
-    state = NusConnState.scanning;
-    errorText = null;
-    _notify();
-    // Broad scan on purpose: firmware cannot be filtered by NUS service UUID
-    // (not advertised), so the UI filters by name instead.
-    // No OS timeout: the scan runs until the user taps Stop. Repeated
-    // start/stop bursts (>~5 per 30s) make Android serve empty results
-    // (scan throttle), so one continuous scan beats frequent re-scans.
-    // A 2-minute watchdog stops runaway scans (battery); re-tapping Scan
-    // afterwards is a single start/stop pair, safely under the throttle.
-    _scanWatchdog?.cancel();
-    _scanWatchdog = Timer(const Duration(minutes: 2), () {
-      if (state == NusConnState.scanning) {
-        stopScan();
-      }
-    });
-    // startScan returns when stopScan is called; drop back to idle here —
-    // otherwise the button sticks on "Stop scan".
-    await FlutterBluePlus.startScan();
-    await _scanSub?.cancel();
-    _scanSub = null;
-    if (state == NusConnState.scanning) {
-      state = NusConnState.idle;
-      _notify();
-    }
+  String? get errorText => _repo.errorText;
+  set errorText(String? v) {
+    _repo.errorText = v;
+    notifyListeners();
   }
 
-  Future<void> stopScan() async {
-    try {
-      await FlutterBluePlus.stopScan();
-    } catch (_) {
-      // Already stopped — harmless.
-    }
-    _scanWatchdog?.cancel();
-    _scanWatchdog = null;
-    await _scanSub?.cancel();
-    _scanSub = null;
-    if (state == NusConnState.scanning) {
-      state = NusConnState.idle;
-      _notify();
-    }
+  List<ScanResult> get scanResults => _repo.scanResults;
+  set scanResults(List<ScanResult> v) {
+    _repo.scanResults = v;
+    notifyListeners();
   }
 
-  // ---------------------------------------------------------------- connect
-
-  /// Drops all GATT/link subscriptions and characteristic handles without
-  /// touching [device] or the want-connection flag. Must run before every
-  /// (re)connect: otherwise each reconnect stacks another `_onNotifyBytes`
-  /// listener and every line is logged N times.
-  void _teardownLink() {
-    for (final s in _subs) {
-      s.cancel();
-    }
-    _subs.clear();
-    _rx = null;
-    _tx = null;
-    _rxBuf.clear();
+  BluetoothDevice? get device => _repo.device;
+  set device(BluetoothDevice? v) {
+    _repo.device = v;
+    notifyListeners();
   }
 
-  /// Post-connect setup shared by [connect] and the auto-reconnect path:
-  /// MTU, service discovery, TX-notify subscribe, disconnect watcher.
-  Future<void> _setupLink(BluetoothDevice d) async {
-    // Larger writes = fewer chunks per line. Best effort; 20 is the fallback.
-    try {
-      if (Platform.isAndroid) {
-        final mtu = await d.requestMtu(185);
-        _mtuPayload = mtu - 3;
-      } else {
-        final mtu = await d.mtu.first.timeout(const Duration(seconds: 5));
-        _mtuPayload = mtu - 3;
-      }
-      if (_mtuPayload < 20) {
-        _mtuPayload = 20;
-      }
-    } catch (_) {
-      _mtuPayload = 20;
-    }
+  String get deviceLabel => _repo.deviceLabel;
 
-    final services = await d.discoverServices();
-    BluetoothCharacteristic? rx;
-    BluetoothCharacteristic? tx;
-    for (final s in services) {
-      if (s.uuid == nusServiceUuid) {
-        for (final c in s.characteristics) {
-          if (c.uuid == nusRxUuid) {
-            rx = c;
-          } else if (c.uuid == nusTxUuid) {
-            tx = c;
-          }
-        }
-      }
-    }
-    if (rx == null || tx == null) {
-      throw StateError('Nordic UART Service not found on this device.');
-    }
-    _rx = rx;
-    _tx = tx;
-    await tx.setNotifyValue(true);
-    _subs.add(tx.onValueReceived.listen(_onNotifyBytes));
-    _subs.add(
-      d.connectionState.listen((s) {
-        if (s == BluetoothConnectionState.disconnected && _wantConnection) {
-          _onUnexpectedDisconnect();
-        }
-      }),
-    );
+  List<LogEntry> get log => _repo.log;
+
+  String? get activeProfileId => _repo.activeProfileId;
+  set activeProfileId(String? v) {
+    _repo.activeProfileId = v;
+    notifyListeners();
   }
 
-  Future<void> connect(BluetoothDevice d) async {
-    await stopScan();
-    state = NusConnState.connecting;
-    errorText = null;
-    activeProfileId = null;
-    _notify();
-    try {
-      device = d;
-      _wantConnection = true;
-      _reconnectTries = 0;
-      _teardownLink();
-      if (clearLogOnConnect) {
-        log.clear();
-      }
-      // License.nonprofit: this MIT-licensed companion app is personal/open-source use.
-      try {
-        await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 15));
-      } catch (_) {
-        // One automatic retry: the board often holds a stale half-open link
-        // that supervision timeout drops within seconds, so attempt two lands.
-        _addInfo('Connect failed, retrying once…');
-        _notify();
-        await Future.delayed(const Duration(seconds: 2));
-        await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 15));
-      }
-      await _setupLink(d);
+  bool get clearLogOnConnect => _repo.clearLogOnConnect;
+  set clearLogOnConnect(bool v) => _repo.clearLogOnConnect = v;
 
-      state = NusConnState.ready;
-      _addInfo('Connected. Send `help` anytime.');
-      _notify();
-      // Ask for identity outright: the pushed `hello` is best-effort (a
-      // notify sent during CCCD enable can be lost in the race), while a
-      // `proto?` reply always arrives. Either path selects the profile.
-      await sendLine('proto?');
-    } catch (e) {
-      state = NusConnState.error;
-      errorText = e.toString();
-      _wantConnection = false;
-      _notify();
-      rethrow;
-    }
+  bool get showTimestamps => _repo.showTimestamps;
+  set showTimestamps(bool v) => _repo.showTimestamps = v;
+
+  bool get vibrateOnRumble => _repo.vibrateOnRumble;
+  set vibrateOnRumble(bool v) => _repo.vibrateOnRumble = v;
+
+  int get lastLedIndex => _repo.lastLedIndex;
+  set lastLedIndex(int v) {
+    _repo.lastLedIndex = v;
+    notifyListeners();
   }
 
-  Future<void> disconnect() async {
-    _wantConnection = false;
-    _reconnectTimer?.cancel();
-    // Clean unsubscribe first: the firmware only drops its subscriber count
-    // on explicit unsubscribe, so skipping this would leave a phantom
-    // subscriber (harmless, but it eats the next greeting).
-    try {
-      await _tx?.setNotifyValue(false);
-    } catch (_) {
-      // Link already gone — harmless.
-    }
-    try {
-      await device?.disconnect();
-    } catch (_) {
-      // Already gone — harmless.
-    }
-    _teardownLink();
-    device = null;
-    activeProfileId = null;
-    if (state != NusConnState.idle) {
-      state = NusConnState.idle;
-      _notify();
-    }
+  List<int> get lastRgb => _repo.lastRgb;
+  set lastRgb(List<int> v) {
+    _repo.lastRgb = v;
+    notifyListeners();
   }
 
-  void _onUnexpectedDisconnect() {
-    // Drop stale notify/connection subscriptions now; the reconnect attempt
-    // below re-subscribes from scratch via [_setupLink].
-    _teardownLink();
-    _addInfo('Link lost.');
-    if (_reconnectTries >= 3) {
-      state = NusConnState.idle;
-      errorText = 'Disconnected (auto-reconnect gave up after 3 tries).';
-      _wantConnection = false;
-      _notify();
-      return;
-    }
-    _reconnectTries++;
-    _addInfo('Reconnecting (try $_reconnectTries/3)…');
-    _notify();
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 2), () async {
-      final d = device;
-      if (!_wantConnection || d == null || _disposed) {
-        return;
-      }
-      try {
-        await d.connect(license: License.nonprofit, timeout: const Duration(seconds: 10));
-        await _setupLink(d);
-        _reconnectTries = 0;
-        _addInfo('Reconnected.');
-        _notify();
-      } catch (_) {
-        _onUnexpectedDisconnect();
-      }
-    });
-  }
+  // ------------------------------------------------------------- behaviour
+  void setClearLogOnConnect(bool v) => _repo.setClearLogOnConnect(v);
+  void setShowTimestamps(bool v) => _repo.setShowTimestamps(v);
+  void setVibrateOnRumble(bool v) => _repo.setVibrateOnRumble(v);
 
-  // --------------------------------------------------------------------- io
+  static int rumbleVibrateMs(String rest) =>
+      BleRepository.rumbleVibrateMs(rest);
 
-  void _onNotifyBytes(List<int> bytes) {
-    _rxBuf.write(utf8.decode(bytes, allowMalformed: true));
-    for (;;) {
-      final s = _rxBuf.toString();
-      final idx = s.indexOf('\n');
-      if (idx < 0) {
-        break;
-      }
-      final line = s.substring(0, idx);
-      _rxBuf.clear();
-      _rxBuf.write(s.substring(idx + 1));
-      if (line.trim().isEmpty) {
-        continue;
-      }
-      final msg = parseLine(line);
-      if (msg is HelloMessage) {
-        activeProfileId = msg.profileId;
-      } else if (msg is ProtoMessage) {
-        activeProfileId = msg.profileId;
-      }
-      log.add(LogEntry(msg));
-      if (msg is EventMessage) {
-        _trackHostState(msg);
-        if (msg.name == 'rumble' && vibrateOnRumble) {
-          unawaited(_buzzForRumble(msg.rest));
-        }
-      }
-    }
-    _notify();
-  }
+  void setProfileOverride(String id) => _repo.setProfileOverride(id);
 
-  /// Sends one line (appends `\n`, chunks to the negotiated MTU).
-  /// Outbound writes are serialized through [_sendQueue] so concurrent
-  /// callers never interleave chunks; a tap waits at most one in-flight line.
-  Future<void> sendLine(String line) {
-    final rx = _rx;
-    final text = line.trim();
-    if (rx == null || text.isEmpty || state != NusConnState.ready) {
-      return Future.value();
-    }
-    log.add(LogEntry(InfoMessage(text), outgoing: true));
-    _notify();
-    final bytes = utf8.encode('$text\n');
-    final run = _sendQueue.then((_) async {
-      for (var i = 0; i < bytes.length; i += _mtuPayload) {
-        final end =
-            (i + _mtuPayload < bytes.length) ? i + _mtuPayload : bytes.length;
-        await rx.write(bytes.sublist(i, end));
-      }
-    });
-    _sendQueue = run.catchError((_) {});
-    return run;
-  }
+  Future<bool> ensurePermissions() => _repo.ensurePermissions();
 
-  void _addInfo(String text) {
-    log.add(LogEntry(InfoMessage(text)));
-  }
+  Stream<BluetoothAdapterState> get adapterState => _repo.adapterState;
 
-  void clearLog() {
-    log.clear();
-    _notify();
-  }
+  Future<bool> get isSupported => _repo.isSupported;
 
-  // ------------------------------------------------------------------ misc
+  Future<void> startScan() => _repo.startScan();
 
-  void _notify() {
-    if (!_disposed) {
-      notifyListeners();
-    }
-  }
+  Future<void> stopScan() => _repo.stopScan();
+
+  Future<void> connect(BluetoothDevice d) => _repo.connect(d);
+
+  Future<void> disconnect() => _repo.disconnect();
+
+  Future<void> sendLine(String line) => _repo.sendLine(line);
+
+  void clearLog() => _repo.clearLog();
 
   @override
   void dispose() {
     _disposed = true;
-    _reconnectTimer?.cancel();
-    _scanWatchdog?.cancel();
-    _scanWatchdog = null;
-    _scanSub?.cancel();
-    _scanSub = null;
-    _teardownLink();
+    _repo.removeListener(_onRepoChanged);
+    if (_ownsRepo) _repo.dispose();
     super.dispose();
   }
 }

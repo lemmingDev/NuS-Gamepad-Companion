@@ -46,3 +46,6 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Skills (regenerable via `npx skills add flutter/agent-plugins`)
+.agents/
