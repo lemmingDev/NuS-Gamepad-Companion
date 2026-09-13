@@ -119,14 +119,18 @@ class BleRepository extends ChangeNotifier {
         lastLedIndex = v.clamp(0, 4);
       }
     } else if (msg.name == 'rgb') {
+      // SInput joystick RGB is 6-bit (0..63) on the wire — joypad.ai sends
+      // e.g. 64 for #FFFFFF (255/4). Scale back to 0..255 for display so the
+      // swatch matches the web picker.
+      int scale(int v) => (v.clamp(0, 63) * 255 + 31) ~/ 63;
       final r = _kvInt(msg.rest, 'r');
       final g = _kvInt(msg.rest, 'g');
       final b = _kvInt(msg.rest, 'b');
       if (r != null || g != null || b != null) {
         final cur = List<int>.of(lastRgb);
-        if (r != null) cur[0] = r.clamp(0, 255);
-        if (g != null) cur[1] = g.clamp(0, 255);
-        if (b != null) cur[2] = b.clamp(0, 255);
+        if (r != null) cur[0] = scale(r);
+        if (g != null) cur[1] = scale(g);
+        if (b != null) cur[2] = scale(b);
         lastRgb = cur;
       }
     }
